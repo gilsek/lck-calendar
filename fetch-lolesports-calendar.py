@@ -35,6 +35,7 @@ def iter_json_objects(text: str):
 def collect_events(
     html_text: str,
     league_ids: set[str],
+    team_filters: set[str],
     start_after: datetime | None,
     start_before: datetime | None,
 ) -> list[dict]:
@@ -50,6 +51,8 @@ def collect_events(
             league = event.get("league") or {}
             if league_ids and league.get("id") not in league_ids:
                 continue
+            if team_filters and not event_matches_team(event, team_filters):
+                continue
             if event.get("startTime"):
                 start = parse_dt(event["startTime"])
                 if start_after and start < start_after:
@@ -58,6 +61,20 @@ def collect_events(
                     continue
             events_by_id[event["id"]] = event
     return sorted(events_by_id.values(), key=lambda e: e.get("startTime", ""))
+
+
+def event_matches_team(event: dict, team_filters: set[str]) -> bool:
+    for team in event.get("matchTeams") or []:
+        values = [
+            team.get("code"),
+            team.get("name"),
+            team.get("slug"),
+            team.get("id"),
+        ]
+        normalized = {str(value).strip().lower() for value in values if value}
+        if normalized & team_filters:
+            return True
+    return False
 
 
 def parse_dt(value: str) -> datetime:
@@ -166,6 +183,11 @@ def main() -> int:
         default="lck,msi,worlds,first_stand",
         help="Comma-separated league slugs or numeric LoL Esports league IDs.",
     )
+    parser.add_argument(
+        "--teams",
+        default="",
+        help="Comma-separated team codes, names, slugs, or IDs. Example: T1",
+    )
     parser.add_argument("--duration-hours", type=int, default=4)
     parser.add_argument("--calendar-name", default="LoL Esports - LCK + Internationals")
     parser.add_argument("--from-days", type=int, default=-7)
@@ -175,13 +197,18 @@ def main() -> int:
     selected_ids = set()
     for item in [part.strip() for part in args.leagues.split(",") if part.strip()]:
         selected_ids.add(LEAGUE_IDS.get(item, item))
+    team_filters = {
+        part.strip().lower() for part in args.teams.split(",") if part.strip()
+    }
 
     now = datetime.now(timezone.utc)
     start_after = now + timedelta(days=args.from_days) if args.from_days is not None else None
     start_before = now + timedelta(days=args.to_days) if args.to_days is not None else None
 
     html_text = fetch_text(args.url)
-    events = collect_events(html_text, selected_ids, start_after, start_before)
+    events = collect_events(
+        html_text, selected_ids, team_filters, start_after, start_before
+    )
     ics = build_ics(events, args.calendar_name, args.duration_hours)
     Path(args.output).write_text(ics, encoding="utf-8", newline="")
     print(f"Wrote {len(events)} events to {args.output}")

@@ -17,6 +17,12 @@ Calendar feed path:
 https://<github-user>.github.io/<repo-name>/lolesports-lck.ics
 ```
 
+T1 LCK-only feed path:
+
+```text
+https://<github-user>.github.io/<repo-name>/lolesports-t1-lck.ics
+```
+
 Manual local update:
 
 ```powershell
