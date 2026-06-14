@@ -27,7 +27,7 @@ jobs:
           python-version: "3.11"
       - run: mkdir -p public
       - run: python fetch-lolesports-calendar.py --output public/lolesports-lck.ics
-      - run: python fetch-lolesports-calendar.py --output public/lolesports-t1-lck.ics --leagues lck --teams T1 --calendar-name "LoL Esports - T1 LCK"
+      - run: python fetch-lolesports-calendar.py --output public/lolesports-t1-lck.ics --leagues lck,msi,worlds,first_stand --teams T1 --team-filter-leagues lck --calendar-name "LoL Esports - T1 LCK + Internationals"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
