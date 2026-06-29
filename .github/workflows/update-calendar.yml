@@ -2,7 +2,7 @@ name: Update LoL Esports Calendar
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
   push:
     branches:
@@ -26,8 +26,18 @@ jobs:
         with:
           python-version: "3.11"
       - run: mkdir -p public
-      - run: python fetch-lolesports-calendar.py --output public/lolesports-lck.ics
-      - run: python fetch-lolesports-calendar.py --output public/lolesports-t1-lck.ics --leagues lck,msi,worlds,first_stand --teams T1 --team-filter-leagues lck --calendar-name "LoL Esports - T1 LCK + Internationals"
+      - run: >
+          python fetch-lolesports-calendar.py
+          --url "https://lolesports.com/ko-KR/leagues/lck,https://lolesports.com/ko-KR/leagues/msi,https://lolesports.com/ko-KR/leagues/worlds,https://lolesports.com/ko-KR/leagues/first_stand"
+          --output public/lolesports-lck.ics
+      - run: >
+          python fetch-lolesports-calendar.py
+          --url "https://lolesports.com/ko-KR/leagues/lck,https://lolesports.com/ko-KR/leagues/msi,https://lolesports.com/ko-KR/leagues/worlds,https://lolesports.com/ko-KR/leagues/first_stand"
+          --output public/lolesports-t1-lck.ics
+          --leagues lck,msi,worlds,first_stand
+          --teams T1
+          --team-filter-leagues lck
+          --calendar-name "LoL Esports - T1 LCK + Internationals"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public

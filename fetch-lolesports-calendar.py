@@ -67,6 +67,30 @@ def collect_events(
     return sorted(events_by_id.values(), key=lambda e: e.get("startTime", ""))
 
 
+def event_completeness_score(event: dict) -> int:
+    score = 0
+    for team in event.get("matchTeams") or []:
+        code = (team.get("code") or "").strip().upper()
+        name = (team.get("name") or "").strip().upper()
+        if code and code != "TBD":
+            score += 2
+        if name and name != "TBD":
+            score += 1
+    if event.get("state") and event.get("state") != "unstarted":
+        score += 1
+    return score
+
+
+def merge_events(existing_events: dict[str, dict], events: list[dict]) -> None:
+    for event in events:
+        event_id = event["id"]
+        existing = existing_events.get(event_id)
+        if not existing or event_completeness_score(event) >= event_completeness_score(
+            existing
+        ):
+            existing_events[event_id] = event
+
+
 def event_matches_team(event: dict, team_filters: set[str]) -> bool:
     for team in event.get("matchTeams") or []:
         values = [
@@ -180,7 +204,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Create an ICS calendar from official LoL Esports schedule data embedded in lolesports.com."
     )
-    parser.add_argument("--url", default="https://lolesports.com/ko-KR/leagues/lck")
+    parser.add_argument(
+        "--url",
+        default="https://lolesports.com/ko-KR/leagues/lck",
+        help="Comma-separated LoL Esports pages to scrape and merge.",
+    )
     parser.add_argument("--output", default="lolesports-lck.ics")
     parser.add_argument(
         "--leagues",
@@ -222,15 +250,21 @@ def main() -> int:
     start_after = now + timedelta(days=args.from_days) if args.from_days is not None else None
     start_before = now + timedelta(days=args.to_days) if args.to_days is not None else None
 
-    html_text = fetch_text(args.url)
-    events = collect_events(
-        html_text,
-        selected_ids,
-        team_filters,
-        team_filter_league_ids,
-        start_after,
-        start_before,
-    )
+    events_by_id = {}
+    for url in [part.strip() for part in args.url.split(",") if part.strip()]:
+        html_text = fetch_text(url)
+        merge_events(
+            events_by_id,
+            collect_events(
+                html_text,
+                selected_ids,
+                team_filters,
+                team_filter_league_ids,
+                start_after,
+                start_before,
+            ),
+        )
+    events = sorted(events_by_id.values(), key=lambda event: event.get("startTime", ""))
     ics = build_ics(events, args.calendar_name, args.duration_hours)
     Path(args.output).write_text(ics, encoding="utf-8", newline="")
     print(f"Wrote {len(events)} events to {args.output}")
