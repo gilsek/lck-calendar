@@ -141,6 +141,71 @@ def format_utc(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def unfold_ics_lines(text: str) -> list[str]:
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    unfolded = []
+    for line in lines:
+        if line.startswith((" ", "\t")) and unfolded:
+            unfolded[-1] += line[1:]
+        else:
+            unfolded.append(line)
+    return unfolded
+
+
+def parse_ics_utc(value: str) -> datetime | None:
+    value = value.strip()
+    if not value:
+        return None
+    if value.endswith("Z"):
+        try:
+            return datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            return None
+    try:
+        return datetime.strptime(value[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def load_existing_future_events(path: str, keep_after: datetime) -> dict[str, list[str]]:
+    ics_path = Path(path)
+    if not path or not ics_path.exists():
+        return {}
+
+    text = ics_path.read_text(encoding="utf-8")
+    raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    events = {}
+    index = 0
+    while index < len(raw_lines):
+        if raw_lines[index] != "BEGIN:VEVENT":
+            index += 1
+            continue
+        start_index = index
+        while index < len(raw_lines) and raw_lines[index] != "END:VEVENT":
+            index += 1
+        if index >= len(raw_lines):
+            break
+        block = raw_lines[start_index : index + 1]
+        unfolded = unfold_ics_lines("\n".join(block))
+        uid = None
+        event_end = None
+        event_start = None
+        for line in unfolded:
+            if line.startswith("UID:"):
+                uid = line.split(":", 1)[1]
+            elif line.startswith("DTEND"):
+                event_end = parse_ics_utc(line.split(":", 1)[1])
+            elif line.startswith("DTSTART"):
+                event_start = parse_ics_utc(line.split(":", 1)[1])
+        comparable_time = event_end or event_start
+        if uid and comparable_time and comparable_time >= keep_after:
+            events[uid] = block
+        index += 1
+    return events
+
+
 def event_title(event: dict) -> str:
     teams = event.get("matchTeams") or []
     names = [team.get("code") or team.get("name") or "TBD" for team in teams[:2]]
@@ -169,8 +234,14 @@ def event_description(event: dict) -> str:
     return "\n".join(line for line in lines if not line.endswith(": "))
 
 
-def build_ics(events: list[dict], calendar_name: str, duration_hours: int) -> str:
+def build_ics(
+    events: list[dict],
+    calendar_name: str,
+    duration_hours: int,
+    preserved_events: dict[str, list[str]] | None = None,
+) -> str:
     now = format_utc(datetime.now(timezone.utc))
+    preserved_events = preserved_events or {}
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -179,10 +250,12 @@ def build_ics(events: list[dict], calendar_name: str, duration_hours: int) -> st
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{ics_escape(calendar_name)}",
     ]
+    current_uids = set()
     for event in events:
         start = parse_dt(event["startTime"])
         end = start + timedelta(hours=duration_hours)
         uid = f"lolesports-{event['id']}@lolesports.com"
+        current_uids.add(uid)
         lines.extend(
             [
                 "BEGIN:VEVENT",
@@ -196,6 +269,9 @@ def build_ics(events: list[dict], calendar_name: str, duration_hours: int) -> st
                 "END:VEVENT",
             ]
         )
+    for uid in sorted(preserved_events):
+        if uid not in current_uids:
+            lines.extend(preserved_events[uid])
     lines.append("END:VCALENDAR")
     return "\r\n".join(fold_ics_line(line) for line in lines) + "\r\n"
 
@@ -232,6 +308,11 @@ def main() -> int:
     parser.add_argument("--calendar-name", default="LoL Esports - LCK + Internationals")
     parser.add_argument("--from-days", type=int, default=-7)
     parser.add_argument("--to-days", type=int, default=120)
+    parser.add_argument(
+        "--merge-existing-ics",
+        default="",
+        help="Existing ICS file whose future VEVENTs should be preserved if missing from the latest scrape.",
+    )
     args = parser.parse_args()
 
     selected_ids = set()
@@ -265,9 +346,19 @@ def main() -> int:
             ),
         )
     events = sorted(events_by_id.values(), key=lambda event: event.get("startTime", ""))
-    ics = build_ics(events, args.calendar_name, args.duration_hours)
+    preserved_events = load_existing_future_events(args.merge_existing_ics, now)
+    ics = build_ics(events, args.calendar_name, args.duration_hours, preserved_events)
     Path(args.output).write_text(ics, encoding="utf-8", newline="")
-    print(f"Wrote {len(events)} events to {args.output}")
+    preserved_count = len(
+        [
+            uid
+            for uid in preserved_events
+            if uid not in {f"lolesports-{event['id']}@lolesports.com" for event in events}
+        ]
+    )
+    print(
+        f"Wrote {len(events)} scraped events and preserved {preserved_count} existing events to {args.output}"
+    )
     return 0
 
 

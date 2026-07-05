@@ -25,11 +25,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: mkdir -p public
+      - run: mkdir -p public previous
+      - run: curl -fsSL https://gilsek.github.io/lck-calendar/lolesports-lck.ics -o previous/lolesports-lck.ics || true
+      - run: curl -fsSL https://gilsek.github.io/lck-calendar/lolesports-t1-lck.ics -o previous/lolesports-t1-lck.ics || true
       - run: >
           python fetch-lolesports-calendar.py
           --url "https://lolesports.com/ko-KR/leagues/lck,https://lolesports.com/ko-KR/leagues/msi,https://lolesports.com/ko-KR/leagues/worlds,https://lolesports.com/ko-KR/leagues/first_stand"
           --output public/lolesports-lck.ics
+          --merge-existing-ics previous/lolesports-lck.ics
       - run: >
           python fetch-lolesports-calendar.py
           --url "https://lolesports.com/ko-KR/leagues/lck,https://lolesports.com/ko-KR/leagues/msi,https://lolesports.com/ko-KR/leagues/worlds,https://lolesports.com/ko-KR/leagues/first_stand"
@@ -38,6 +41,7 @@ jobs:
           --teams T1
           --team-filter-leagues lck
           --calendar-name "LoL Esports - T1 LCK + Internationals"
+          --merge-existing-ics previous/lolesports-t1-lck.ics
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
