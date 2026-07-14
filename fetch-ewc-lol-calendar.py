@@ -193,6 +193,44 @@ def load_existing_future_events(path: str, keep_after: datetime) -> dict[str, li
     return events
 
 
+def normalize_existing_ics_durations(text: str) -> str:
+    raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    normalized_lines = []
+    index = 0
+    while index < len(raw_lines):
+        if raw_lines[index] != "BEGIN:VEVENT":
+            normalized_lines.append(raw_lines[index])
+            index += 1
+            continue
+
+        start_index = index
+        while index < len(raw_lines) and raw_lines[index] != "END:VEVENT":
+            index += 1
+        if index >= len(raw_lines):
+            normalized_lines.extend(raw_lines[start_index:])
+            break
+
+        block = raw_lines[start_index : index + 1]
+        unfolded = unfold_ics_lines("\n".join(block))
+        block_text = "\n".join(unfolded)
+        best_of_match = re.search(r"Format: Bo([135])", block_text)
+        start = None
+        if best_of_match:
+            for line in unfolded:
+                if line.startswith("DTSTART"):
+                    start = parse_ics_utc(line.split(":", 1)[1])
+                    break
+        if start and best_of_match:
+            end = start + timedelta(hours=int(best_of_match.group(1)))
+            for block_index, line in enumerate(block):
+                if line.startswith("DTEND"):
+                    block[block_index] = f"DTEND:{format_utc(end)}"
+                    break
+        normalized_lines.extend(block)
+        index += 1
+    return "\r\n".join(normalized_lines).rstrip("\r\n") + "\r\n"
+
+
 def slot_name(slot: dict) -> str:
     competitor = slot.get("competitor") or {}
     team = competitor.get("team") or {}
@@ -381,7 +419,7 @@ def main() -> int:
         existing_path = Path(args.merge_existing_ics)
         if args.merge_existing_ics and existing_path.exists():
             Path(args.output).write_text(
-                existing_path.read_text(encoding="utf-8"),
+                normalize_existing_ics_durations(existing_path.read_text(encoding="utf-8")),
                 encoding="utf-8",
                 newline="",
             )
