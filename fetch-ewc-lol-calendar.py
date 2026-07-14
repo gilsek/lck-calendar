@@ -250,6 +250,17 @@ def series_description(phase: dict, series: dict, source_url: str) -> str:
     return "\n".join(line for line in lines if not line.endswith(": "))
 
 
+def series_duration_hours(series: dict, fallback_hours: int) -> int:
+    best_of = (series.get("format") or {}).get("best_of")
+    if best_of == 1:
+        return 1
+    if best_of == 3:
+        return 3
+    if best_of == 5:
+        return 5
+    return fallback_hours
+
+
 def collect_series(
     structures: list[dict],
     start_after: datetime | None,
@@ -291,7 +302,7 @@ def build_ics(
     current_uids = set()
     for phase, series in series_items:
         start = parse_dt(series["scheduled_start"] or series["actual_start"])
-        end = start + timedelta(hours=duration_hours)
+        end = start + timedelta(hours=series_duration_hours(series, duration_hours))
         uid = f"ewc-lol-{series['id']}@esportsworldcup.com"
         current_uids.add(uid)
         lines.extend(
