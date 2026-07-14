@@ -28,7 +28,7 @@ jobs:
       - run: mkdir -p public previous
       - run: curl -fsSL https://gilsek.github.io/lck-calendar/lolesports-lck.ics -o previous/lolesports-lck.ics || true
       - run: curl -fsSL https://gilsek.github.io/lck-calendar/lolesports-t1-lck.ics -o previous/lolesports-t1-lck.ics || true
-      - run: curl -fsSL https://gilsek.github.io/lck-calendar/ewc-lol.ics -o previous/ewc-lol.ics || true
+      - run: curl -fsSL https://gilsek.github.io/lck-calendar/ewc-lol.ics -o public/ewc-lol.ics || true
       - run: >
           python fetch-lolesports-calendar.py
           --url "https://lolesports.com/ko-KR/leagues/lck,https://lolesports.com/ko-KR/leagues/msi,https://lolesports.com/ko-KR/leagues/worlds,https://lolesports.com/ko-KR/leagues/first_stand"
@@ -43,12 +43,6 @@ jobs:
           --team-filter-leagues lck
           --calendar-name "LoL Esports - T1 LCK + Internationals"
           --merge-existing-ics previous/lolesports-t1-lck.ics
-      - run: >
-          python fetch-ewc-lol-calendar.py
-          --url "https://esportsworldcup.com/en/competitions/2026/league-of-legends"
-          --output public/ewc-lol.ics
-          --calendar-name "EWC LoL"
-          --merge-existing-ics previous/ewc-lol.ics
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public

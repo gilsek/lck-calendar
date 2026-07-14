@@ -1,0 +1,56 @@
+name: Update EWC LoL Calendar
+
+on:
+  schedule:
+    # EWC LoL 2026 event window. Update this when next year's dates move.
+    - cron: "7,22,37,52 * 15-19 7 *"
+    # Monthly discovery outside the event window.
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - fetch-ewc-lol-calendar.py
+      - .github/workflows/update-ewc-calendar.yml
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: mkdir -p public previous
+      - run: curl -fsSL https://gilsek.github.io/lck-calendar/lolesports-lck.ics -o public/lolesports-lck.ics || true
+      - run: curl -fsSL https://gilsek.github.io/lck-calendar/lolesports-t1-lck.ics -o public/lolesports-t1-lck.ics || true
+      - run: curl -fsSL https://gilsek.github.io/lck-calendar/ewc-lol.ics -o previous/ewc-lol.ics || true
+      - run: >
+          python fetch-ewc-lol-calendar.py
+          --url "https://esportsworldcup.com/en/competitions/2026/league-of-legends"
+          --output public/ewc-lol.ics
+          --calendar-name "EWC LoL"
+          --merge-existing-ics previous/ewc-lol.ics
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
