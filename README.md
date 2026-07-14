@@ -9,7 +9,9 @@ Included leagues:
 - Worlds
 - First Stand
 
-The GitHub Actions workflow refreshes the feed every 6 hours and publishes it with GitHub Pages.
+- EWC LoL
+
+The GitHub Actions workflow refreshes the feeds every 30 minutes and publishes them with GitHub Pages.
 
 Calendar feed path:
 
@@ -21,6 +23,12 @@ T1 LCK plus all international events feed path:
 
 ```text
 https://<github-user>.github.io/<repo-name>/lolesports-t1-lck.ics
+```
+
+EWC LoL feed path, parsed directly from the official Esports World Cup League of Legends page:
+
+```text
+https://<github-user>.github.io/<repo-name>/ewc-lol.ics
 ```
 
 Manual local update:
