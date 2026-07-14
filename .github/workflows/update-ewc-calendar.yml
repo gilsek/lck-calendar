@@ -40,6 +40,7 @@ jobs:
           --url "https://esportsworldcup.com/en/competitions/2026/league-of-legends"
           --output public/ewc-lol.ics
           --calendar-name "EWC LoL"
+          --to-days 400
           --merge-existing-ics previous/ewc-lol.ics
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -4,10 +4,12 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
 DEFAULT_URL = "https://esportsworldcup.com/en/competitions/2026/league-of-legends"
+YEAR_IN_URL = re.compile(r"(/competitions/)(\d{4})(/)")
 
 
 def fetch_text(url: str) -> str:
@@ -76,6 +78,18 @@ def extract_structures(html_text: str) -> list[dict]:
     if start < 0:
         raise ValueError("Could not find initialStructures in EWC page payload.")
     return parse_balanced_json(payload, start + len(key))
+
+
+def fallback_urls(url: str, next_years: int) -> list[str]:
+    urls = [url]
+    match = YEAR_IN_URL.search(url)
+    if not match:
+        return urls
+
+    base_year = int(match.group(2))
+    for offset in range(1, next_years + 1):
+        urls.append(YEAR_IN_URL.sub(rf"\g<1>{base_year + offset}\g<3>", url, count=1))
+    return urls
 
 
 def parse_dt(value: str) -> datetime:
@@ -311,6 +325,15 @@ def main() -> int:
     parser.add_argument("--from-days", type=int, default=-7)
     parser.add_argument("--to-days", type=int, default=30)
     parser.add_argument(
+        "--fallback-next-years",
+        type=int,
+        default=1,
+        help=(
+            "Try the same competition slug with later year URLs when the primary "
+            "URL has no events in the selected date window."
+        ),
+    )
+    parser.add_argument(
         "--merge-existing-ics",
         default="",
         help="Existing ICS file whose future VEVENTs should be preserved if missing from the latest scrape.",
@@ -321,23 +344,49 @@ def main() -> int:
     start_after = now + timedelta(days=args.from_days) if args.from_days is not None else None
     start_before = now + timedelta(days=args.to_days) if args.to_days is not None else None
 
-    html_text = fetch_text(args.url)
-    structures = extract_structures(html_text)
-    series_items = collect_series(structures, start_after, start_before)
+    series_items = []
+    source_url = args.url
+    first_successful_result = None
+    failures = []
+    for candidate_url in fallback_urls(args.url, args.fallback_next_years):
+        try:
+            html_text = fetch_text(candidate_url)
+            structures = extract_structures(html_text)
+            candidate_series = collect_series(structures, start_after, start_before)
+        except (HTTPError, URLError, TimeoutError, ValueError) as error:
+            failures.append(f"{candidate_url}: {error}")
+            continue
+
+        if first_successful_result is None:
+            first_successful_result = (candidate_url, candidate_series)
+        if candidate_series:
+            source_url = candidate_url
+            series_items = candidate_series
+            break
+
+    if not series_items and first_successful_result is not None:
+        source_url, series_items = first_successful_result
+    if first_successful_result is None:
+        raise RuntimeError(
+            "Could not load any EWC LoL source URL:\n" + "\n".join(failures)
+        )
+
     preserved_events = load_existing_future_events(args.merge_existing_ics, now)
     ics = build_ics(
         series_items,
         args.calendar_name,
         args.duration_hours,
-        args.url,
+        source_url,
         preserved_events,
     )
     Path(args.output).write_text(ics, encoding="utf-8", newline="")
     current_uids = {f"ewc-lol-{series['id']}@esportsworldcup.com" for _, series in series_items}
     preserved_count = len([uid for uid in preserved_events if uid not in current_uids])
     print(
-        f"Wrote {len(series_items)} scraped series and preserved {preserved_count} existing events to {args.output}"
+        f"Wrote {len(series_items)} scraped series from {source_url} and preserved {preserved_count} existing events to {args.output}"
     )
+    for failure in failures:
+        print(f"Skipped fallback URL: {failure}")
     return 0
 
 
