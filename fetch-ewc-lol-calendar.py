@@ -367,6 +367,19 @@ def main() -> int:
     if not series_items and first_successful_result is not None:
         source_url, series_items = first_successful_result
     if first_successful_result is None:
+        existing_path = Path(args.merge_existing_ics)
+        if args.merge_existing_ics and existing_path.exists():
+            Path(args.output).write_text(
+                existing_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+                newline="",
+            )
+            print(
+                f"Could not load any EWC LoL source URL. Copied existing ICS to {args.output}"
+            )
+            for failure in failures:
+                print(f"Skipped fallback URL: {failure}")
+            return 0
         raise RuntimeError(
             "Could not load any EWC LoL source URL:\n" + "\n".join(failures)
         )
