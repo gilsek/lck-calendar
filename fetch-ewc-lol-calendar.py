@@ -262,8 +262,8 @@ def series_title(series: dict) -> str:
         names.append("TBD")
 
     if has_resolved_competitors(series):
-        return f"EWC LoL - {names[0]} vs {names[1]}"
-    return f"EWC LoL - {label}"
+        return f"EWC - {names[0]} vs {names[1]}"
+    return f"EWC - {label}"
 
 
 def series_description(phase: dict, series: dict, source_url: str) -> str:
@@ -370,7 +370,7 @@ def main() -> int:
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--output", default="ewc-lol.ics")
     parser.add_argument("--duration-hours", type=int, default=3)
-    parser.add_argument("--calendar-name", default="EWC LoL")
+    parser.add_argument("--calendar-name", default="EWC")
     parser.add_argument("--from-days", type=int, default=-7)
     parser.add_argument("--to-days", type=int, default=30)
     parser.add_argument(
