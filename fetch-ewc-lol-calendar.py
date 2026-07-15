@@ -193,11 +193,15 @@ def load_existing_future_events(path: str, keep_after: datetime) -> dict[str, li
     return events
 
 
-def normalize_existing_ics_durations(text: str) -> str:
+def normalize_existing_ics(text: str, calendar_name: str) -> str:
     raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     normalized_lines = []
     index = 0
     while index < len(raw_lines):
+        if raw_lines[index].startswith("X-WR-CALNAME:"):
+            normalized_lines.append(f"X-WR-CALNAME:{ics_escape(calendar_name)}")
+            index += 1
+            continue
         if raw_lines[index] != "BEGIN:VEVENT":
             normalized_lines.append(raw_lines[index])
             index += 1
@@ -226,6 +230,10 @@ def normalize_existing_ics_durations(text: str) -> str:
                 if line.startswith("DTEND"):
                     block[block_index] = f"DTEND:{format_utc(end)}"
                     break
+        for block_index, line in enumerate(block):
+            if line.startswith("SUMMARY:"):
+                block[block_index] = line.replace("SUMMARY:EWC LoL - ", "SUMMARY:EWC - ", 1)
+                break
         normalized_lines.extend(block)
         index += 1
     return "\r\n".join(normalized_lines).rstrip("\r\n") + "\r\n"
@@ -419,7 +427,9 @@ def main() -> int:
         existing_path = Path(args.merge_existing_ics)
         if args.merge_existing_ics and existing_path.exists():
             Path(args.output).write_text(
-                normalize_existing_ics_durations(existing_path.read_text(encoding="utf-8")),
+                normalize_existing_ics(
+                    existing_path.read_text(encoding="utf-8"), args.calendar_name
+                ),
                 encoding="utf-8",
                 newline="",
             )
