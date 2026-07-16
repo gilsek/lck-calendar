@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import importlib.util
 import json
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -9,6 +11,8 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_URL = "https://esportsworldcup.com/en/competitions/2026/league-of-legends"
+DEFAULT_LOLESPORTS_FALLBACK_URL = "https://lolesports.com/ko-KR"
+EWC_LOLESPORTS_LEAGUE_ID = "116838530616006090"
 YEAR_IN_URL = re.compile(r"(/competitions/)(\d{4})(/)")
 
 
@@ -154,6 +158,14 @@ def parse_ics_utc(value: str) -> datetime | None:
         return datetime.strptime(value[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+def event_block_start_key(block: list[str]) -> str | None:
+    for line in unfold_ics_lines("\n".join(block)):
+        if line.startswith("DTSTART"):
+            start = parse_ics_utc(line.split(":", 1)[1])
+            return format_utc(start) if start else None
+    return None
 
 
 def load_existing_future_events(path: str, keep_after: datetime) -> dict[str, list[str]]:
@@ -307,6 +319,96 @@ def series_duration_hours(series: dict, fallback_hours: int) -> int:
     return fallback_hours
 
 
+def load_lolesports_module():
+    module_path = Path(__file__).with_name("fetch-lolesports-calendar.py")
+    spec = importlib.util.spec_from_file_location("lolesports_calendar", module_path)
+    if not spec or not spec.loader:
+        raise RuntimeError(f"Could not load {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def lolesports_team_slot(team: dict, slot_number: int) -> dict:
+    code = (team.get("code") or "").strip()
+    name = (team.get("name") or "").strip()
+    label = code or name or "TBD"
+    if label.upper() == "TBD":
+        return {"slot": slot_number, "source": {"label": "TBD"}, "competitor": None}
+    return {
+        "slot": slot_number,
+        "source": {"label": label},
+        "competitor": {
+            "team": {
+                "name": name or label,
+                "short_name": code or name or label,
+            }
+        },
+    }
+
+
+def lolesports_event_to_series(event: dict) -> tuple[dict, dict]:
+    match = event.get("match") or {}
+    strategy = match.get("strategy") or {}
+    best_of = strategy.get("count") if strategy.get("type") == "bestOf" else None
+    block_name = event.get("blockName") or "Match"
+    phase_name = {
+        "그룹": "Group Stage",
+        "8강": "Quarterfinal",
+        "4강": "Semifinal",
+        "결승": "Grand Final",
+        "3위 결정전": "3rd place",
+    }.get(block_name, block_name)
+    teams = event.get("matchTeams") or []
+    slots = [lolesports_team_slot(team, index + 1) for index, team in enumerate(teams[:2])]
+    while len(slots) < 2:
+        slots.append({"slot": len(slots) + 1, "source": {"label": "TBD"}, "competitor": None})
+
+    phase = {"name": phase_name}
+    series = {
+        "id": f"lolesports-{event['id']}",
+        "state": event.get("state") or match.get("state") or "",
+        "scheduled_start": event.get("startTime"),
+        "actual_start": None,
+        "format": {"type": "BEST_OF", "best_of": best_of},
+        "structure": {
+            "label": phase_name,
+            "round_name": phase_name,
+            "bracket_type": "",
+            "bracket_path": "",
+        },
+        "slots": slots,
+    }
+    return phase, series
+
+
+def collect_lolesports_fallback_series(
+    urls: str,
+    start_after: datetime | None,
+    start_before: datetime | None,
+) -> list[tuple[dict, dict]]:
+    lolesports = load_lolesports_module()
+    events_by_id = {}
+    for url in [part.strip() for part in urls.split(",") if part.strip()]:
+        html_text = lolesports.fetch_text(url)
+        lolesports.merge_events(
+            events_by_id,
+            lolesports.collect_events(
+                html_text,
+                {EWC_LOLESPORTS_LEAGUE_ID},
+                set(),
+                set(),
+                start_after,
+                start_before,
+            ),
+        )
+    series_items = [
+        lolesports_event_to_series(event)
+        for event in sorted(events_by_id.values(), key=lambda item: item.get("startTime", ""))
+    ]
+    return [item for item in series_items if has_resolved_competitors(item[1])]
+
+
 def collect_series(
     structures: list[dict],
     start_after: datetime | None,
@@ -346,11 +448,13 @@ def build_ics(
         f"X-WR-CALNAME:{ics_escape(calendar_name)}",
     ]
     current_uids = set()
+    current_start_counts = Counter()
     for phase, series in series_items:
         start = parse_dt(series["scheduled_start"] or series["actual_start"])
         end = start + timedelta(hours=series_duration_hours(series, duration_hours))
         uid = f"ewc-lol-{series['id']}@esportsworldcup.com"
         current_uids.add(uid)
+        current_start_counts[format_utc(start)] += 1
         lines.extend(
             [
                 "BEGIN:VEVENT",
@@ -365,10 +469,37 @@ def build_ics(
             ]
         )
     for uid in sorted(preserved_events):
-        if uid not in current_uids:
-            lines.extend(preserved_events[uid])
+        if uid in current_uids:
+            continue
+        start_key = event_block_start_key(preserved_events[uid])
+        if start_key and current_start_counts[start_key] > 0:
+            current_start_counts[start_key] -= 1
+            continue
+        lines.extend(preserved_events[uid])
     lines.append("END:VCALENDAR")
     return "\r\n".join(fold_ics_line(line) for line in lines) + "\r\n"
+
+
+def count_preserved_events(
+    series_items: list[tuple[dict, dict]], preserved_events: dict[str, list[str]]
+) -> int:
+    current_uids = set()
+    current_start_counts = Counter()
+    for _, series in series_items:
+        start = parse_dt(series["scheduled_start"] or series["actual_start"])
+        current_uids.add(f"ewc-lol-{series['id']}@esportsworldcup.com")
+        current_start_counts[format_utc(start)] += 1
+
+    preserved_count = 0
+    for uid in sorted(preserved_events):
+        if uid in current_uids:
+            continue
+        start_key = event_block_start_key(preserved_events[uid])
+        if start_key and current_start_counts[start_key] > 0:
+            current_start_counts[start_key] -= 1
+            continue
+        preserved_count += 1
+    return preserved_count
 
 
 def main() -> int:
@@ -379,6 +510,7 @@ def main() -> int:
     parser.add_argument("--output", default="ewc-lol.ics")
     parser.add_argument("--duration-hours", type=int, default=3)
     parser.add_argument("--calendar-name", default="EWC")
+    parser.add_argument("--lolesports-fallback-url", default=DEFAULT_LOLESPORTS_FALLBACK_URL)
     parser.add_argument("--from-days", type=int, default=-7)
     parser.add_argument("--to-days", type=int, default=30)
     parser.add_argument(
@@ -424,24 +556,41 @@ def main() -> int:
     if not series_items and first_successful_result is not None:
         source_url, series_items = first_successful_result
     if first_successful_result is None:
-        existing_path = Path(args.merge_existing_ics)
-        if args.merge_existing_ics and existing_path.exists():
-            Path(args.output).write_text(
-                normalize_existing_ics(
-                    existing_path.read_text(encoding="utf-8"), args.calendar_name
-                ),
-                encoding="utf-8",
-                newline="",
+        try:
+            series_items = collect_lolesports_fallback_series(
+                args.lolesports_fallback_url,
+                start_after,
+                start_before,
             )
-            print(
-                f"Could not load any EWC LoL source URL. Copied existing ICS to {args.output}"
-            )
+            if series_items:
+                source_url = args.lolesports_fallback_url
+                print(
+                    f"Could not load any EWC LoL source URL. Using {len(series_items)} LoL Esports fallback events."
+                )
+        except (HTTPError, URLError, TimeoutError, ValueError, RuntimeError) as error:
+            failures.append(f"{args.lolesports_fallback_url}: {error}")
+
+        if not series_items:
+            existing_path = Path(args.merge_existing_ics)
+            if args.merge_existing_ics and existing_path.exists():
+                Path(args.output).write_text(
+                    normalize_existing_ics(
+                        existing_path.read_text(encoding="utf-8"), args.calendar_name
+                    ),
+                    encoding="utf-8",
+                    newline="",
+                )
+                print(
+                    f"Could not load any EWC LoL source URL. Copied existing ICS to {args.output}"
+                )
+                for failure in failures:
+                    print(f"Skipped fallback URL: {failure}")
+                return 0
             for failure in failures:
                 print(f"Skipped fallback URL: {failure}")
-            return 0
-        raise RuntimeError(
-            "Could not load any EWC LoL source URL:\n" + "\n".join(failures)
-        )
+            raise RuntimeError(
+                "Could not load any EWC LoL source URL:\n" + "\n".join(failures)
+            )
 
     preserved_events = load_existing_future_events(args.merge_existing_ics, now)
     ics = build_ics(
@@ -452,8 +601,7 @@ def main() -> int:
         preserved_events,
     )
     Path(args.output).write_text(ics, encoding="utf-8", newline="")
-    current_uids = {f"ewc-lol-{series['id']}@esportsworldcup.com" for _, series in series_items}
-    preserved_count = len([uid for uid in preserved_events if uid not in current_uids])
+    preserved_count = count_preserved_events(series_items, preserved_events)
     print(
         f"Wrote {len(series_items)} scraped series from {source_url} and preserved {preserved_count} existing events to {args.output}"
     )
